@@ -117,13 +117,6 @@
 #  endif
 #endif
 #if PLATFORM_WINDOWS
-#  ifndef WIN32_LEAN_AND_MEAN
-#    define WIN32_LEAN_AND_MEAN
-#  endif
-#  include <windows.h>
-#  if ENABLE_VALIDATE_ARGS
-#    include <intsafe.h>
-#  endif
 #else
 #  include <unistd.h>
 #  include <stdio.h>
@@ -146,11 +139,6 @@
 #include <string.h>
 #include <errno.h>
 
-#if defined(_WIN32) && (!defined(BUILD_DYNAMIC_LINK) || !BUILD_DYNAMIC_LINK)
-#include <fibersapi.h>
-static DWORD fls_key;
-#endif
-
 #if PLATFORM_POSIX
 #  include <sys/mman.h>
 #  include <sched.h>
@@ -172,28 +160,51 @@ extern int madvise(caddr_t, size_t, int);
 #endif
 #include <errno.h>
 
-#if ENABLE_ASSERTS
-#  undef NDEBUG
-#  if defined(_MSC_VER) && !defined(_DEBUG)
-#    define _DEBUG
-#  endif
-#  include <assert.h>
-#define RPMALLOC_TOSTRING_M(x) #x
-#define RPMALLOC_TOSTRING(x) RPMALLOC_TOSTRING_M(x)
-#define rpmalloc_assert(truth, message)                                                                      \
-	do {                                                                                                     \
-		if (!(truth)) {                                                                                      \
-			if (_memory_config.error_callback) {                                                             \
-				_memory_config.error_callback(                                                               \
-				    message " (" RPMALLOC_TOSTRING(truth) ") at " __FILE__ ":" RPMALLOC_TOSTRING(__LINE__)); \
-			} else {                                                                                         \
-				assert((truth) && message);                                                                  \
-			}                                                                                                \
-		}                                                                                                    \
-	} while (0)
+#define __STRIGIFY( x ) #x
+#define _STRIGIFY( x )  __STRIGIFY(x)
+
+
+extern int __cdecl puts( const char* msg );
+
+__forceinline static void fail( const char* msg )
+{
+#ifndef NDEBUG
+	puts( msg );
+	asm volatile ( "int $0x3" /*int3*/ );
 #else
-#  define rpmalloc_assert(truth, message) do {} while(0)
+	asm volatile ( ".byte 0xf1" /*icebp*/ );
 #endif
+}
+
+#ifndef NDEBUG
+#define rpmalloc_assert(truth, msg) { if( !(truth) ) fail( "Memory assert fail '" msg "' at " _STRIGIFY(__FILE__) ":" _STRIGIFY(__LINE__) ); }
+#else
+#define rpmalloc_assert(truth, message) do {} while(0)
+#endif
+
+//#if ENABLE_ASSERTS
+//#  undef NDEBUG
+//#  if defined(_MSC_VER) && !defined(_DEBUG)
+//#    define _DEBUG
+//#  endif
+//#  include <assert.h>
+//#define RPMALLOC_TOSTRING_M(x) #x
+//#define RPMALLOC_TOSTRING(x) RPMALLOC_TOSTRING_M(x)
+//#define rpmalloc_assert(truth, message)                                                                      \
+//	do {                                                                                                     \
+//		if (!(truth)) {                                                                                      \
+//			if (_memory_config.error_callback) {                                                             \
+//				_memory_config.error_callback(                                                               \
+//				    message " (" RPMALLOC_TOSTRING(truth) ") at " __FILE__ ":" RPMALLOC_TOSTRING(__LINE__)); \
+//			} else {                                                                                         \
+//				assert((truth) && message);                                                                  \
+//			}                                                                                                \
+//		}                                                                                                    \
+//	} while (0)
+//#else
+//#  define rpmalloc_assert(truth, message) do {} while(0)
+//#endif
+
 #if ENABLE_STATISTICS
 #  include <stdio.h>
 #endif
@@ -594,11 +605,9 @@ static uintptr_t _rpmalloc_main_thread_id;
 //! Configuration
 static rpmalloc_config_t _memory_config;
 //! Memory page size
-static size_t _memory_page_size;
+static const size_t _memory_page_size = 2 * 1024 * 1024;
 //! Shift to divide by page size
-static size_t _memory_page_size_shift;
-//! Granularity at which memory pages are mapped by OS
-static size_t _memory_map_granularity;
+static const size_t _memory_page_size_shift = 12 + 9;
 #if RPMALLOC_CONFIGURABLE
 //! Size of a span of memory pages
 static size_t _memory_span_size;
@@ -625,7 +634,7 @@ static size_t _memory_medium_size_limit;
 //! Heap ID counter
 static atomic32_t _memory_heap_id;
 //! Huge page support
-static int _memory_huge_pages;
+static const int _memory_huge_pages = 1;
 #if ENABLE_GLOBAL_CACHE
 //! Global span cache
 static global_cache_t _memory_span_cache[LARGE_CLASS_COUNT];
@@ -675,39 +684,17 @@ static atomic32_t _huge_pages_current;
 static int32_t _huge_pages_peak;
 #endif
 
+
+
 ////////////
 ///
 /// Thread local heap and ID
 ///
 //////
 
-//! Current thread heap
-#if (defined(__APPLE__) || defined(__HAIKU__)) && ENABLE_PRELOAD
-static pthread_key_t _memory_thread_heap;
-#else
-#  ifdef _MSC_VER
-#    define _Thread_local __declspec(thread)
-#    define TLS_MODEL
-#  else
-#    ifndef __HAIKU__
-#      define TLS_MODEL __attribute__((tls_model("initial-exec")))
-#    else
-#      define TLS_MODEL
-#    endif
-#    if !defined(__clang__) && defined(__GNUC__)
-#      define _Thread_local __thread
-#    endif
-#  endif
-static _Thread_local heap_t* _memory_thread_heap TLS_MODEL;
-#endif
-
 static inline heap_t*
 get_thread_heap_raw(void) {
-#if (defined(__APPLE__) || defined(__HAIKU__)) && ENABLE_PRELOAD
-	return pthread_getspecific(_memory_thread_heap);
-#else
-	return _memory_thread_heap;
-#endif
+	return ( heap_t* ) rpmalloc_get_tls();
 }
 
 //! Get the current thread heap
@@ -725,46 +712,14 @@ get_thread_heap(void) {
 }
 
 //! Fast thread ID
-static inline uintptr_t
-get_thread_id(void) {
-#if defined(_WIN32)
-	return (uintptr_t)((void*)NtCurrentTeb());
-#elif defined(__GNUC__) || defined(__clang__)
-	uintptr_t tid;
-#  if defined(__i386__)
-	__asm__("movl %%gs:0, %0" : "=r" (tid) : : );
-#  elif defined(__x86_64__)
-#    if defined(__MACH__)
-	__asm__("movq %%gs:0, %0" : "=r" (tid) : : );
-#    else
-	__asm__("movq %%fs:0, %0" : "=r" (tid) : : );
-#    endif
-#  elif defined(__arm__)
-	__asm__ volatile ("mrc p15, 0, %0, c13, c0, 3" : "=r" (tid));
-#  elif defined(__aarch64__)
-#    if defined(__MACH__)
-	// tpidr_el0 likely unused, always return 0 on iOS
-	__asm__ volatile ("mrs %0, tpidrro_el0" : "=r" (tid));
-#    else
-	__asm__ volatile ("mrs %0, tpidr_el0" : "=r" (tid));
-#    endif
-#  else
-	tid = (uintptr_t)((void*)get_thread_heap_raw());
-#  endif
-	return tid;
-#else
-	return (uintptr_t)((void*)get_thread_heap_raw());
-#endif
+static FORCEINLINE uintptr_t get_thread_id(void) {
+	return rpmalloc_get_thread_id();
 }
 
 //! Set the current thread heap
 static void
 set_thread_heap(heap_t* heap) {
-#if (defined(__APPLE__) || defined(__HAIKU__)) && ENABLE_PRELOAD
-	pthread_setspecific(_memory_thread_heap, heap);
-#else
-	_memory_thread_heap = heap;
-#endif
+	rpmalloc_set_tls( heap );
 	if (heap)
 		heap->owner_thread = get_thread_id();
 }
@@ -780,37 +735,40 @@ rpmalloc_set_main_thread(void) {
 
 static void
 _rpmalloc_spin(void) {
-#if defined(_MSC_VER)
-	_mm_pause();
-#elif defined(__x86_64__) || defined(__i386__)
-	__asm__ volatile("pause" ::: "memory");
-#elif defined(__aarch64__) || (defined(__arm__) && __ARM_ARCH >= 7)
-	__asm__ volatile("yield" ::: "memory");
-#elif defined(__powerpc__) || defined(__powerpc64__)
-        // No idea if ever been compiled in such archs but ... as precaution
-	__asm__ volatile("or 27,27,27");
-#elif defined(__sparc__)
-	__asm__ volatile("rd %ccr, %g0 \n\trd %ccr, %g0 \n\trd %ccr, %g0");
-#else
-	struct timespec ts = {0};
-	nanosleep(&ts, 0);
-#endif
+	__asm__ volatile( "pause" ::: "memory" );
 }
 
-#if defined(_WIN32) && (!defined(BUILD_DYNAMIC_LINK) || !BUILD_DYNAMIC_LINK)
-static void NTAPI
-_rpmalloc_thread_destructor(void* value) {
-#if ENABLE_OVERRIDE
-	// If this is called on main thread it means rpmalloc_finalize
-	// has not been called and shutdown is forced (through _exit) or unclean
-	if (get_thread_id() == _rpmalloc_main_thread_id)
-		return;
-#endif
-	if (value)
-		rpmalloc_thread_finalize(1);
-}
-#endif
+////////////
+///
+/// SYNC primitives
+///
+//////
 
+FORCEINLINE int _rpmalloc_try_acquire( atomic32_t* lock )
+{
+	int irq = rpmalloc_raise_irq();
+	size_t cycles = 32768;
+	while ( cycles-- )
+	{
+		if ( atomic_cas32_acquire( lock, 1, 0 ) )
+			return irq;
+		_rpmalloc_spin();
+	}
+	rpmalloc_lower_irq( irq );
+	return -1;
+}
+FORCEINLINE int _rpmalloc_acquire( atomic32_t* lock )
+{
+	int irq = rpmalloc_raise_irq();
+	while ( !atomic_cas32_acquire( lock, 1, 0 ) )
+		_rpmalloc_spin();
+	return irq;
+}
+FORCEINLINE void _rpmalloc_release( atomic32_t* lock, int irq )
+{
+	atomic_store32_release( lock, 0 );
+	rpmalloc_lower_irq( irq );
+}
 
 ////////////
 ///
@@ -848,6 +806,7 @@ _rpmalloc_unmap(void* address, size_t size, size_t offset, size_t release) {
 	_memory_config.memory_unmap(address, size, offset, release);
 }
 
+#if 0
 //! Default implementation to map new pages to virtual memory
 static void*
 _rpmalloc_mmap_os(size_t size, size_t* offset) {
@@ -944,6 +903,7 @@ _rpmalloc_unmap_os(void* address, size_t size, size_t offset, size_t release) {
 	if (release)
 		_rpmalloc_stat_sub(&_mapped_pages_os, release >> _memory_page_size_shift);
 }
+#endif
 
 static void
 _rpmalloc_span_mark_as_subspan_unless_master(span_t* master, span_t* subspan, size_t span_count);
@@ -1097,8 +1057,8 @@ _rpmalloc_span_map_aligned_count(heap_t* heap, size_t span_count) {
 		}
 		if (reserved_count > DEFAULT_SPAN_MAP_COUNT) {
 			// If huge pages, make sure only one thread maps more memory to avoid bloat
-			while (!atomic_cas32_acquire(&_memory_global_lock, 1, 0))
-				_rpmalloc_spin();
+			int irq = _rpmalloc_acquire( &_memory_global_lock );
+
 			size_t remain_count = reserved_count - DEFAULT_SPAN_MAP_COUNT;
 			reserved_count = DEFAULT_SPAN_MAP_COUNT;
 			span_t* remain_span = (span_t*)pointer_offset(reserved_spans, reserved_count * _memory_span_size);
@@ -1107,7 +1067,8 @@ _rpmalloc_span_map_aligned_count(heap_t* heap, size_t span_count) {
 				_rpmalloc_span_unmap(_memory_global_reserve);
 			}
 			_rpmalloc_global_set_reserved_spans(span, remain_span, remain_count);
-			atomic_store32_release(&_memory_global_lock, 0);
+
+			_rpmalloc_release( &_memory_global_lock, irq );
 		}
 		_rpmalloc_heap_set_reserved_spans(heap, span, reserved_spans, reserved_count);
 	}
@@ -1120,10 +1081,12 @@ _rpmalloc_span_map(heap_t* heap, size_t span_count) {
 	if (span_count <= heap->spans_reserved)
 		return _rpmalloc_span_map_from_reserve(heap, span_count);
 	span_t* span = 0;
+	int irq = -1;
 	if (_memory_page_size > _memory_span_size) {
 		// If huge pages, make sure only one thread maps more memory to avoid bloat
-		while (!atomic_cas32_acquire(&_memory_global_lock, 1, 0))
-			_rpmalloc_spin();
+
+		irq = _rpmalloc_acquire( &_memory_global_lock );
+		
 		if (_memory_global_reserve_count >= span_count) {
 			size_t reserve_count = (!heap->spans_reserved ? DEFAULT_SPAN_MAP_COUNT : span_count);
 			if (_memory_global_reserve_count < reserve_count)
@@ -1141,8 +1104,9 @@ _rpmalloc_span_map(heap_t* heap, size_t span_count) {
 	}
 	if (!span)
 		span = _rpmalloc_span_map_aligned_count(heap, span_count);
+
 	if (_memory_page_size > _memory_span_size)
-		atomic_store32_release(&_memory_global_lock, 0);
+		_rpmalloc_release( &_memory_global_lock, irq );
 	return span;
 }
 
@@ -1338,8 +1302,7 @@ _rpmalloc_span_finalize(heap_t* heap, size_t iclass, span_t* span, span_t** list
 //! Finalize a global cache
 static void
 _rpmalloc_global_cache_finalize(global_cache_t* cache) {
-	while (!atomic_cas32_acquire(&cache->lock, 1, 0))
-		_rpmalloc_spin();
+	int irq = _rpmalloc_acquire( &cache->lock );
 
 	for (size_t ispan = 0; ispan < cache->count; ++ispan)
 		_rpmalloc_span_unmap(cache->span[ispan]);
@@ -1351,7 +1314,7 @@ _rpmalloc_global_cache_finalize(global_cache_t* cache) {
 		_rpmalloc_span_unmap(span);
 	}
 
-	atomic_store32_release(&cache->lock, 0);
+	_rpmalloc_release(&cache->lock, irq);
 }
 
 static void
@@ -1363,8 +1326,8 @@ _rpmalloc_global_cache_insert_spans(span_t** span, size_t span_count, size_t cou
 	global_cache_t* cache = &_memory_span_cache[span_count - 1];
 
 	size_t insert_count = count;
-	while (!atomic_cas32_acquire(&cache->lock, 1, 0))
-		_rpmalloc_spin();
+
+	int irq = _rpmalloc_acquire( &cache->lock );
 
 	if ((cache->count + insert_count) > cache_limit)
 		insert_count = cache_limit - cache->count;
@@ -1383,7 +1346,8 @@ _rpmalloc_global_cache_insert_spans(span_t** span, size_t span_count, size_t cou
 		current_span->next = cache->overflow;
 		cache->overflow = current_span;
 	}
-	atomic_store32_release(&cache->lock, 0);
+
+	_rpmalloc_release( &cache->lock, irq );
 
 	span_t* keep = 0;
 	for (size_t ispan = insert_count; ispan < count; ++ispan) {
@@ -1399,8 +1363,7 @@ _rpmalloc_global_cache_insert_spans(span_t** span, size_t span_count, size_t cou
 	}
 
 	if (keep) {
-		while (!atomic_cas32_acquire(&cache->lock, 1, 0))
-			_rpmalloc_spin();
+		int irq = _rpmalloc_acquire( &cache->lock );
 
 		size_t islot = 0;
 		while (keep) {
@@ -1426,7 +1389,7 @@ _rpmalloc_global_cache_insert_spans(span_t** span, size_t span_count, size_t cou
 			cache->overflow = keep;
 		}
 
-		atomic_store32_release(&cache->lock, 0);
+		_rpmalloc_release( &cache->lock, irq );
 	}
 }
 
@@ -1435,8 +1398,10 @@ _rpmalloc_global_cache_extract_spans(span_t** span, size_t span_count, size_t co
 	global_cache_t* cache = &_memory_span_cache[span_count - 1];
 
 	size_t extract_count = 0;
-	while (!atomic_cas32_acquire(&cache->lock, 1, 0))
-		_rpmalloc_spin();
+
+	int irq = _rpmalloc_try_acquire( &cache->lock );
+	if ( irq < 0 )
+		return 0;
 
 	size_t want = count - extract_count;
 	if (want > cache->count)
@@ -1452,7 +1417,7 @@ _rpmalloc_global_cache_extract_spans(span_t** span, size_t span_count, size_t co
 		cache->overflow = current_span->next;
 	}
 
-	atomic_store32_release(&cache->lock, 0);
+	_rpmalloc_release( &cache->lock, irq );
 
 	return extract_count;
 }
@@ -1882,8 +1847,7 @@ _rpmalloc_heap_extract_orphan(heap_t** heap_list) {
 static heap_t*
 _rpmalloc_heap_allocate(int first_class) {
 	heap_t* heap = 0;
-	while (!atomic_cas32_acquire(&_memory_global_lock, 1, 0))
-		_rpmalloc_spin();
+	int irq = _rpmalloc_acquire( &_memory_global_lock );
 	if (first_class == 0)
 		heap = _rpmalloc_heap_extract_orphan(&_memory_orphan_heaps);
 #if RPMALLOC_FIRST_CLASS_HEAPS
@@ -1892,7 +1856,7 @@ _rpmalloc_heap_allocate(int first_class) {
 #endif
 	if (!heap)
 		heap = _rpmalloc_heap_allocate_new();
-	atomic_store32_release(&_memory_global_lock, 0);
+	_rpmalloc_release(&_memory_global_lock, irq);
 	_rpmalloc_heap_cache_adopt_deferred(heap, 0);
 	return heap;
 }
@@ -2647,114 +2611,9 @@ rpmalloc_initialize_config(const rpmalloc_config_t* config) {
 		memset(&_memory_config, 0, sizeof(rpmalloc_config_t));
 
 	if (!_memory_config.memory_map || !_memory_config.memory_unmap) {
-		_memory_config.memory_map = _rpmalloc_mmap_os;
-		_memory_config.memory_unmap = _rpmalloc_unmap_os;
+		_memory_config.memory_map = rpmalloc_mmap_os;
+		_memory_config.memory_unmap = rpmalloc_unmap_os;
 	}
-
-#if RPMALLOC_CONFIGURABLE
-	_memory_page_size = _memory_config.page_size;
-#else
-	_memory_page_size = 0;
-#endif
-	_memory_huge_pages = 0;
-	_memory_map_granularity = _memory_page_size;
-	if (!_memory_page_size) {
-#if PLATFORM_WINDOWS
-		SYSTEM_INFO system_info;
-		memset(&system_info, 0, sizeof(system_info));
-		GetSystemInfo(&system_info);
-		_memory_page_size = system_info.dwPageSize;
-		_memory_map_granularity = system_info.dwAllocationGranularity;
-#else
-		_memory_page_size = (size_t)sysconf(_SC_PAGESIZE);
-		_memory_map_granularity = _memory_page_size;
-		if (_memory_config.enable_huge_pages) {
-#if defined(__linux__)
-			size_t huge_page_size = 0;
-			FILE* meminfo = fopen("/proc/meminfo", "r");
-			if (meminfo) {
-				char line[128];
-				while (!huge_page_size && fgets(line, sizeof(line) - 1, meminfo)) {
-					line[sizeof(line) - 1] = 0;
-					if (strstr(line, "Hugepagesize:"))
-						huge_page_size = (size_t)strtol(line + 13, 0, 10) * 1024;
-				}
-				fclose(meminfo);
-			}
-			if (huge_page_size) {
-				_memory_huge_pages = 1;
-				_memory_page_size = huge_page_size;
-				_memory_map_granularity = huge_page_size;
-			}
-#elif defined(__FreeBSD__)
-			int rc;
-			size_t sz = sizeof(rc);
-
-			if (sysctlbyname("vm.pmap.pg_ps_enabled", &rc, &sz, NULL, 0) == 0 && rc == 1) {
-				_memory_huge_pages = 1;
-				_memory_page_size = 2 * 1024 * 1024;
-				_memory_map_granularity = _memory_page_size;
-			}
-#elif defined(__APPLE__) || defined(__NetBSD__)
-			_memory_huge_pages = 1;
-			_memory_page_size = 2 * 1024 * 1024;
-			_memory_map_granularity = _memory_page_size;
-#endif
-		}
-#endif
-	} else {
-		if (_memory_config.enable_huge_pages)
-			_memory_huge_pages = 1;
-	}
-
-#if PLATFORM_WINDOWS
-	if (_memory_config.enable_huge_pages) {
-		HANDLE token = 0;
-		size_t large_page_minimum = GetLargePageMinimum();
-		if (large_page_minimum)
-			OpenProcessToken(GetCurrentProcess(), TOKEN_ADJUST_PRIVILEGES | TOKEN_QUERY, &token);
-		if (token) {
-			LUID luid;
-			if (LookupPrivilegeValue(0, SE_LOCK_MEMORY_NAME, &luid)) {
-				TOKEN_PRIVILEGES token_privileges;
-				memset(&token_privileges, 0, sizeof(token_privileges));
-				token_privileges.PrivilegeCount = 1;
-				token_privileges.Privileges[0].Luid = luid;
-				token_privileges.Privileges[0].Attributes = SE_PRIVILEGE_ENABLED;
-				if (AdjustTokenPrivileges(token, FALSE, &token_privileges, 0, 0, 0)) {
-					DWORD err = GetLastError();
-					if (err == ERROR_SUCCESS) {
-						_memory_huge_pages = 1;
-						if (large_page_minimum > _memory_page_size)
-						 	_memory_page_size = large_page_minimum;
-						if (large_page_minimum > _memory_map_granularity)
-							_memory_map_granularity = large_page_minimum;
-					}
-				}
-			}
-			CloseHandle(token);
-		}
-	}
-#endif
-
-	size_t min_span_size = 256;
-	size_t max_page_size;
-#if UINTPTR_MAX > 0xFFFFFFFF
-	max_page_size = 4096ULL * 1024ULL * 1024ULL;
-#else
-	max_page_size = 4 * 1024 * 1024;
-#endif
-	if (_memory_page_size < min_span_size)
-		_memory_page_size = min_span_size;
-	if (_memory_page_size > max_page_size)
-		_memory_page_size = max_page_size;
-	_memory_page_size_shift = 0;
-	size_t page_size_bit = _memory_page_size;
-	while (page_size_bit != 1) {
-		++_memory_page_size_shift;
-		page_size_bit >>= 1;
-	}
-	_memory_page_size = ((size_t)1 << _memory_page_size_shift);
 
 #if RPMALLOC_CONFIGURABLE
 	if (!_memory_config.span_size) {
@@ -2792,9 +2651,6 @@ rpmalloc_initialize_config(const rpmalloc_config_t* config) {
 #if (defined(__APPLE__) || defined(__HAIKU__)) && ENABLE_PRELOAD
 	if (pthread_key_create(&_memory_thread_heap, _rpmalloc_heap_release_raw_fc))
 		return -1;
-#endif
-#if defined(_WIN32) && (!defined(BUILD_DYNAMIC_LINK) || !BUILD_DYNAMIC_LINK)
-	fls_key = FlsAlloc(&_rpmalloc_thread_destructor);
 #endif
 
 	//Setup all small and medium size classes
@@ -2876,10 +2732,6 @@ rpmalloc_finalize(void) {
 #if (defined(__APPLE__) || defined(__HAIKU__)) && ENABLE_PRELOAD
 	pthread_key_delete(_memory_thread_heap);
 #endif
-#if defined(_WIN32) && (!defined(BUILD_DYNAMIC_LINK) || !BUILD_DYNAMIC_LINK)
-	FlsFree(fls_key);
-	fls_key = 0;
-#endif
 #if ENABLE_STATISTICS
 	//If you hit these asserts you probably have memory leaks (perhaps global scope data doing dynamic allocations) or double frees in your code
 	rpmalloc_assert(atomic_load32(&_mapped_pages) == 0, "Memory leak detected");
@@ -2898,9 +2750,6 @@ rpmalloc_thread_initialize(void) {
 		if (heap) {
 			_rpmalloc_stat_inc(&_memory_active_heaps);
 			set_thread_heap(heap);
-#if defined(_WIN32) && (!defined(BUILD_DYNAMIC_LINK) || !BUILD_DYNAMIC_LINK)
-			FlsSetValue(fls_key, heap);
-#endif
 		}
 	}
 }
@@ -2912,9 +2761,6 @@ rpmalloc_thread_finalize(int release_caches) {
 	if (heap)
 		_rpmalloc_heap_release_raw(heap, release_caches);
 	set_thread_heap(0);
-#if defined(_WIN32) && (!defined(BUILD_DYNAMIC_LINK) || !BUILD_DYNAMIC_LINK)
-	FlsSetValue(fls_key, 0);
-#endif
 }
 
 int

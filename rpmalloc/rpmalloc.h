@@ -12,6 +12,7 @@
 #pragma once
 
 #include <stddef.h>
+#include <stdint.h>
 
 #ifdef __cplusplus
 extern "C" {
@@ -180,6 +181,18 @@ typedef struct rpmalloc_config_t {
 	int enable_huge_pages;
 	int unused;
 } rpmalloc_config_t;
+
+
+
+// Should be externally defined.
+//
+extern uintptr_t rpmalloc_get_thread_id();
+extern void* rpmalloc_get_tls();
+extern void rpmalloc_set_tls( void* ptr );
+extern void* rpmalloc_mmap_os( size_t size, size_t* offset );
+extern void rpmalloc_unmap_os( void* address, size_t size, size_t offset, size_t release );
+extern int rpmalloc_raise_irq();
+extern void rpmalloc_lower_irq( int irq );
 
 //! Initialize allocator with default configuration
 RPMALLOC_EXPORT int
