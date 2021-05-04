@@ -11,6 +11,12 @@
 
 #include "rpmalloc.h"
 
+
+ //! Default span size
+#define _memory_default_span_size (32 * 1024)
+#define _memory_default_span_size_shift (63-__builtin_clzll(_memory_default_span_size))
+#define _memory_default_span_mask (~((uintptr_t)(_memory_span_size - 1)))
+
 ////////////
 ///
 /// Build time configurable limits
@@ -70,8 +76,8 @@
 #define ENABLE_ADAPTIVE_THREAD_CACHE 0
 #endif
 #ifndef DEFAULT_SPAN_MAP_COUNT
-//! Default number of spans to map in call to map more virtual memory (default values yield 4MiB here)
-#define DEFAULT_SPAN_MAP_COUNT    64
+//! Default number of spans to map in call to map more virtual memory (default values yield 2MiB here)
+#define DEFAULT_SPAN_MAP_COUNT    ((2*1024*1024)/_memory_default_span_size)
 #endif
 #ifndef GLOBAL_CACHE_MULTIPLIER
 //! Multiplier for global cache
@@ -177,7 +183,7 @@ __forceinline static void fail( const char* msg )
 }
 
 #ifndef NDEBUG
-#define rpmalloc_assert(truth, msg) { if( !(truth) ) fail( "Memory assert fail '" msg "' at " _STRIGIFY(__FILE__) ":" _STRIGIFY(__LINE__) ); }
+#define rpmalloc_assert(truth, msg) { if( __builtin_expect(!(truth), 0) ) fail( "Memory assert fail '" msg "' at " _STRIGIFY(__FILE__) ":" _STRIGIFY(__LINE__) ); }
 #else
 #define rpmalloc_assert(truth, message) do {} while(0)
 #endif
@@ -323,7 +329,7 @@ static FORCEINLINE int     atomic_cas_ptr(atomicptr_t* dst, void* val, void* ref
 //! Total number of small + medium size classes
 #define SIZE_CLASS_COUNT          (SMALL_CLASS_COUNT + MEDIUM_CLASS_COUNT)
 //! Number of large block size classes
-#define LARGE_CLASS_COUNT         63
+#define LARGE_CLASS_COUNT         123
 //! Maximum size of a medium block
 #define MEDIUM_SIZE_LIMIT         (SMALL_SIZE_LIMIT + (MEDIUM_GRANULARITY * MEDIUM_CLASS_COUNT))
 //! Maximum size of a large block
@@ -593,11 +599,6 @@ struct global_cache_t {
 ///
 //////
 
-//! Default span size (64KiB)
-#define _memory_default_span_size (64 * 1024)
-#define _memory_default_span_size_shift 16
-#define _memory_default_span_mask (~((uintptr_t)(_memory_span_size - 1)))
-
 //! Initialized flag
 static int _rpmalloc_initialized;
 //! Main thread ID
@@ -637,7 +638,7 @@ static atomic32_t _memory_heap_id;
 static const int _memory_huge_pages = 1;
 #if ENABLE_GLOBAL_CACHE
 //! Global span cache
-static global_cache_t _memory_span_cache[LARGE_CLASS_COUNT];
+static global_cache_t* _memory_span_cache;
 #endif
 //! Global reserved spans
 static span_t* _memory_global_reserve;
@@ -2587,13 +2588,11 @@ _rpmalloc_adjust_size_class(size_t iclass) {
 	}
 }
 
+static const size_t global_cache_size_aligned = ( ( sizeof( global_cache_t ) * LARGE_CLASS_COUNT ) + 0x1FFFFF ) & ~0x1FFFFF;
+
 //! Initialize the allocator and setup global data
 extern inline int
 rpmalloc_initialize(void) {
-	if (_rpmalloc_initialized) {
-		rpmalloc_thread_initialize();
-		return 0;
-	}
 	return rpmalloc_initialize_config(0);
 }
 
@@ -2604,6 +2603,10 @@ rpmalloc_initialize_config(const rpmalloc_config_t* config) {
 		return 0;
 	}
 	_rpmalloc_initialized = 1;
+
+	size_t offset = 0;
+	_memory_span_cache = ( global_cache_t* ) rpmalloc_mmap_os( global_cache_size_aligned, &offset );
+	memset( _memory_span_cache, 0, global_cache_size_aligned );
 
 	if (config)
 		memcpy(&_memory_config, config, sizeof(rpmalloc_config_t));
@@ -2738,6 +2741,8 @@ rpmalloc_finalize(void) {
 	rpmalloc_assert(atomic_load32(&_reserved_spans) == 0, "Memory leak detected");
 	rpmalloc_assert(atomic_load32(&_mapped_pages_os) == 0, "Memory leak detected");
 #endif
+	rpmalloc_unmap_os( _memory_span_cache, global_cache_size_aligned, 0, global_cache_size_aligned );
+	_memory_span_cache = 0;
 
 	_rpmalloc_initialized = 0;
 }
