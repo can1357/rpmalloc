@@ -624,10 +624,6 @@ static uintptr_t _memory_span_mask;
 #endif
 //! Number of spans to map in each map call
 static size_t _memory_span_map_count;
-//! Number of spans to release from thread cache to global cache (single spans)
-static size_t _memory_span_release_count;
-//! Number of spans to release from thread cache to global cache (large multiple spans)
-static size_t _memory_span_release_count_large;
 //! Global size classes
 static size_class_t _memory_size_class[SIZE_CLASS_COUNT];
 //! Run-time size limit of medium blocks
@@ -1057,9 +1053,8 @@ _rpmalloc_span_map_aligned_count(heap_t* heap, size_t span_count) {
 			_rpmalloc_heap_cache_insert(heap, heap->span_reserve);
 		}
 		if (reserved_count > DEFAULT_SPAN_MAP_COUNT) {
-			// If huge pages, make sure only one thread maps more memory to avoid bloat
-			int irq = _rpmalloc_acquire( &_memory_global_lock );
-
+			// If huge pages, the global reserve spin lock is held by caller, _rpmalloc_span_map
+			rpmalloc_assert(atomic_load32(&_memory_global_lock) == 1, "Global spin lock not held as expected");
 			size_t remain_count = reserved_count - DEFAULT_SPAN_MAP_COUNT;
 			reserved_count = DEFAULT_SPAN_MAP_COUNT;
 			span_t* remain_span = (span_t*)pointer_offset(reserved_spans, reserved_count * _memory_span_size);
@@ -1068,8 +1063,6 @@ _rpmalloc_span_map_aligned_count(heap_t* heap, size_t span_count) {
 				_rpmalloc_span_unmap(_memory_global_reserve);
 			}
 			_rpmalloc_global_set_reserved_spans(span, remain_span, remain_count);
-
-			_rpmalloc_release( &_memory_global_lock, irq );
 		}
 		_rpmalloc_heap_set_reserved_spans(heap, span, reserved_spans, reserved_count);
 	}
@@ -2647,9 +2640,6 @@ rpmalloc_initialize_config(const rpmalloc_config_t* config) {
 	_memory_config.span_size = _memory_span_size;
 	_memory_config.span_map_count = _memory_span_map_count;
 	_memory_config.enable_huge_pages = _memory_huge_pages;
-
-	_memory_span_release_count = (_memory_span_map_count > 4 ? ((_memory_span_map_count < 64) ? _memory_span_map_count : 64) : 4);
-	_memory_span_release_count_large = (_memory_span_release_count > 8 ? (_memory_span_release_count / 4) : 2);
 
 #if (defined(__APPLE__) || defined(__HAIKU__)) && ENABLE_PRELOAD
 	if (pthread_key_create(&_memory_thread_heap, _rpmalloc_heap_release_raw_fc))
