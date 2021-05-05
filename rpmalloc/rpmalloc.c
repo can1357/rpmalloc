@@ -743,23 +743,33 @@ _rpmalloc_spin(void) {
 
 FORCEINLINE int _rpmalloc_try_acquire( atomic32_t* lock )
 {
-	int irq = rpmalloc_raise_irq();
-	size_t cycles = 32768;
-	while ( cycles-- )
+	uint16_t cycles = 0xFFFF;
+	while ( 1 )
 	{
+		while ( atomic_load32( lock ) )
+		{
+			if ( !--cycles )
+				return -1;
+			_rpmalloc_spin();
+		}
+
+		int irq = rpmalloc_raise_irq();
 		if ( atomic_cas32_acquire( lock, 1, 0 ) )
 			return irq;
-		_rpmalloc_spin();
+		rpmalloc_lower_irq( irq );
 	}
-	rpmalloc_lower_irq( irq );
-	return -1;
 }
 FORCEINLINE int _rpmalloc_acquire( atomic32_t* lock )
 {
-	int irq = rpmalloc_raise_irq();
-	while ( !atomic_cas32_acquire( lock, 1, 0 ) )
-		_rpmalloc_spin();
-	return irq;
+	while ( 1 )
+	{
+		while ( atomic_load32( lock ) )
+			_rpmalloc_spin();
+		int irq = rpmalloc_raise_irq();
+		if ( atomic_cas32_acquire( lock, 1, 0 ) )
+			return irq;
+		rpmalloc_lower_irq( irq );
+	}
 }
 FORCEINLINE void _rpmalloc_release( atomic32_t* lock, int irq )
 {
