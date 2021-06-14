@@ -172,7 +172,7 @@ extern int madvise(caddr_t, size_t, int);
 
 extern int __cdecl puts( const char* msg );
 
-__forceinline static void fail( const char* msg )
+__declspec(noreturn) __forceinline static void fail( const char* msg )
 {
 #ifndef NDEBUG
 	puts( msg );
@@ -180,12 +180,13 @@ __forceinline static void fail( const char* msg )
 #else
 	asm volatile ( ".byte 0xf1" /*icebp*/ );
 #endif
+	__builtin_unreachable();
 }
 
 #ifndef NDEBUG
 #define rpmalloc_assert(truth, msg) { if( __builtin_expect(!(truth), 0) ) fail( "Memory assert fail '" msg "' at " _STRIGIFY(__FILE__) ":" _STRIGIFY(__LINE__) ); }
 #else
-#define rpmalloc_assert(truth, message) do {} while(0)
+#define rpmalloc_assert(truth, message)
 #endif
 
 //#if ENABLE_ASSERTS
