@@ -222,56 +222,59 @@ __declspec(noreturn) __forceinline static void fail( const char* msg )
 ///
 //////
 
-#if defined(_MSC_VER) && !defined(__clang__)
 
-typedef volatile long      atomic32_t;
-typedef volatile long long atomic64_t;
-typedef volatile void*     atomicptr_t;
+#if defined(_MSC_VER)
+	#include <intrin.h>
+	typedef volatile long      atomic32_t;
+	typedef volatile long long atomic64_t;
+	typedef volatile void*     atomicptr_t;
 
-static FORCEINLINE int32_t atomic_load32(atomic32_t* src) { return *src; }
-static FORCEINLINE void    atomic_store32(atomic32_t* dst, int32_t val) { *dst = val; }
-static FORCEINLINE int32_t atomic_incr32(atomic32_t* val) { return (int32_t)InterlockedIncrement(val); }
-static FORCEINLINE int32_t atomic_decr32(atomic32_t* val) { return (int32_t)InterlockedDecrement(val); }
-static FORCEINLINE int32_t atomic_add32(atomic32_t* val, int32_t add) { return (int32_t)InterlockedExchangeAdd(val, add) + add; }
-static FORCEINLINE int     atomic_cas32_acquire(atomic32_t* dst, int32_t val, int32_t ref) { return (InterlockedCompareExchange(dst, val, ref) == ref) ? 1 : 0; }
-static FORCEINLINE void    atomic_store32_release(atomic32_t* dst, int32_t val) { *dst = val; }
-static FORCEINLINE int64_t atomic_load64(atomic64_t* src) { return *src; }
-static FORCEINLINE int64_t atomic_add64(atomic64_t* val, int64_t add) { return (int64_t)InterlockedExchangeAdd64(val, add) + add; }
-static FORCEINLINE void*   atomic_load_ptr(atomicptr_t* src) { return (void*)*src; }
-static FORCEINLINE void    atomic_store_ptr(atomicptr_t* dst, void* val) { *dst = val; }
-static FORCEINLINE void    atomic_store_ptr_release(atomicptr_t* dst, void* val) { *dst = val; }
-static FORCEINLINE void*   atomic_exchange_ptr_acquire(atomicptr_t* dst, void* val) { return (void*)InterlockedExchangePointer((void* volatile*)dst, val); }
-static FORCEINLINE int     atomic_cas_ptr(atomicptr_t* dst, void* val, void* ref) { return (InterlockedCompareExchangePointer((void* volatile*)dst, val, ref) == ref) ? 1 : 0; }
-
-#define EXPECTED(x) (x)
-#define UNEXPECTED(x) (x)
-
+	static FORCEINLINE int32_t atomic_load32(atomic32_t* src) { return *src; }
+	static FORCEINLINE void    atomic_store32(atomic32_t* dst, int32_t val) { *dst = val; }
+	static FORCEINLINE int32_t atomic_incr32(atomic32_t* val) { return (int32_t)_InterlockedIncrement(val); }
+	static FORCEINLINE int32_t atomic_decr32(atomic32_t* val) { return (int32_t)_InterlockedDecrement(val); }
+	static FORCEINLINE int32_t atomic_add32(atomic32_t* val, int32_t add) { return (int32_t) _InterlockedExchangeAdd(val, add) + add; }
+	static FORCEINLINE int     atomic_cas32_acquire(atomic32_t* dst, int32_t val, int32_t ref) { return ( _InterlockedCompareExchange(dst, val, ref) == ref) ? 1 : 0; }
+	static FORCEINLINE void    atomic_store32_release(atomic32_t* dst, int32_t val) { *dst = val; }
+	static FORCEINLINE int64_t atomic_load64(atomic64_t* src) { return *src; }
+	static FORCEINLINE int64_t atomic_add64(atomic64_t* val, int64_t add) { return (int64_t) _InterlockedExchangeAdd64(val, add) + add; }
+	static FORCEINLINE void*   atomic_load_ptr(atomicptr_t* src) { return (void*)*src; }
+	static FORCEINLINE void    atomic_store_ptr(atomicptr_t* dst, void* val) { *dst = val; }
+	static FORCEINLINE void    atomic_store_ptr_release(atomicptr_t* dst, void* val) { *dst = val; }
+	static FORCEINLINE void*   atomic_exchange_ptr_acquire(atomicptr_t* dst, void* val) { return (void*) _InterlockedExchangePointer((void* volatile*)dst, val); }
+	static FORCEINLINE int     atomic_cas_ptr(atomicptr_t* dst, void* val, void* ref) { return ( _InterlockedCompareExchangePointer((void* volatile*)dst, val, ref) == ref) ? 1 : 0; }
 #else
+	#include <stdatomic.h>
+	typedef volatile _Atomic( int32_t ) atomic32_t;
+	typedef volatile _Atomic( int64_t ) atomic64_t;
+	typedef volatile _Atomic( void* ) atomicptr_t;
 
-#include <stdatomic.h>
+	static FORCEINLINE int32_t atomic_load32( atomic32_t* src ) { return atomic_load_explicit( src, memory_order_relaxed ); }
+	static FORCEINLINE void    atomic_store32( atomic32_t* dst, int32_t val ) { atomic_store_explicit( dst, val, memory_order_relaxed ); }
+	static FORCEINLINE int32_t atomic_incr32( atomic32_t* val ) { return atomic_fetch_add_explicit( val, 1, memory_order_relaxed ) + 1; }
+	static FORCEINLINE int32_t atomic_decr32( atomic32_t* val ) { return atomic_fetch_add_explicit( val, -1, memory_order_relaxed ) - 1; }
+	static FORCEINLINE int32_t atomic_add32( atomic32_t* val, int32_t add ) { return atomic_fetch_add_explicit( val, add, memory_order_relaxed ) + add; }
+	static FORCEINLINE int     atomic_cas32_acquire( atomic32_t* dst, int32_t val, int32_t ref ) { return atomic_compare_exchange_weak_explicit( dst, &ref, val, memory_order_acquire, memory_order_relaxed ); }
+	static FORCEINLINE void    atomic_store32_release( atomic32_t* dst, int32_t val ) { atomic_store_explicit( dst, val, memory_order_release ); }
+	static FORCEINLINE int64_t atomic_load64( atomic64_t* val ) { return atomic_load_explicit( val, memory_order_relaxed ); }
+	static FORCEINLINE int64_t atomic_add64( atomic64_t* val, int64_t add ) { return atomic_fetch_add_explicit( val, add, memory_order_relaxed ) + add; }
+	static FORCEINLINE void* atomic_load_ptr( atomicptr_t* src ) { return atomic_load_explicit( src, memory_order_relaxed ); }
+	static FORCEINLINE void    atomic_store_ptr( atomicptr_t* dst, void* val ) { atomic_store_explicit( dst, val, memory_order_relaxed ); }
+	static FORCEINLINE void    atomic_store_ptr_release( atomicptr_t* dst, void* val ) { atomic_store_explicit( dst, val, memory_order_release ); }
+	static FORCEINLINE void* atomic_exchange_ptr_acquire( atomicptr_t* dst, void* val ) { return atomic_exchange_explicit( dst, val, memory_order_acquire ); }
+	static FORCEINLINE int     atomic_cas_ptr( atomicptr_t* dst, void* val, void* ref ) { return atomic_compare_exchange_weak_explicit( dst, &ref, val, memory_order_relaxed, memory_order_relaxed ); }
+#endif
 
-typedef volatile _Atomic(int32_t) atomic32_t;
-typedef volatile _Atomic(int64_t) atomic64_t;
-typedef volatile _Atomic(void*) atomicptr_t;
-
-static FORCEINLINE int32_t atomic_load32(atomic32_t* src) { return atomic_load_explicit(src, memory_order_relaxed); }
-static FORCEINLINE void    atomic_store32(atomic32_t* dst, int32_t val) { atomic_store_explicit(dst, val, memory_order_relaxed); }
-static FORCEINLINE int32_t atomic_incr32(atomic32_t* val) { return atomic_fetch_add_explicit(val, 1, memory_order_relaxed) + 1; }
-static FORCEINLINE int32_t atomic_decr32(atomic32_t* val) { return atomic_fetch_add_explicit(val, -1, memory_order_relaxed) - 1; }
-static FORCEINLINE int32_t atomic_add32(atomic32_t* val, int32_t add) { return atomic_fetch_add_explicit(val, add, memory_order_relaxed) + add; }
-static FORCEINLINE int     atomic_cas32_acquire(atomic32_t* dst, int32_t val, int32_t ref) { return atomic_compare_exchange_weak_explicit(dst, &ref, val, memory_order_acquire, memory_order_relaxed); }
-static FORCEINLINE void    atomic_store32_release(atomic32_t* dst, int32_t val) { atomic_store_explicit(dst, val, memory_order_release); }
-static FORCEINLINE int64_t atomic_load64(atomic64_t* val) { return atomic_load_explicit(val, memory_order_relaxed); }
-static FORCEINLINE int64_t atomic_add64(atomic64_t* val, int64_t add) { return atomic_fetch_add_explicit(val, add, memory_order_relaxed) + add; }
-static FORCEINLINE void*   atomic_load_ptr(atomicptr_t* src) { return atomic_load_explicit(src, memory_order_relaxed); }
-static FORCEINLINE void    atomic_store_ptr(atomicptr_t* dst, void* val) { atomic_store_explicit(dst, val, memory_order_relaxed); }
-static FORCEINLINE void    atomic_store_ptr_release(atomicptr_t* dst, void* val) { atomic_store_explicit(dst, val, memory_order_release); }
-static FORCEINLINE void*   atomic_exchange_ptr_acquire(atomicptr_t* dst, void* val) { return atomic_exchange_explicit(dst, val, memory_order_acquire); }
-static FORCEINLINE int     atomic_cas_ptr(atomicptr_t* dst, void* val, void* ref) { return atomic_compare_exchange_weak_explicit(dst, &ref, val, memory_order_relaxed, memory_order_relaxed); }
-
-#define EXPECTED(x) __builtin_expect((x), 1)
-#define UNEXPECTED(x) __builtin_expect((x), 0)
-    
+#if defined(_MSC_VER) && !defined(__clang__)
+	#define EXPECTED(x) (x)
+	#define UNEXPECTED(x) (x)
+	static FORCEINLINE int     atomic_bit_test_and_set( atomic32_t* val, int n ) { return _interlockedbittestandset( ( volatile long* ) val, n ); }
+	static FORCEINLINE void    _rpmalloc_yield() { _mm_pause(); }
+#else
+	#define EXPECTED(x)   __builtin_expect((x), 1)
+	#define UNEXPECTED(x) __builtin_expect((x), 0)
+	static FORCEINLINE int     atomic_bit_test_and_set(atomic32_t* val, int n) { int out; asm volatile( "lock btsl %2, %1" : "=@ccc" ( out ), "+m" ( *val ) : "Jr" ( n ) ); return out; }
+	static FORCEINLINE void    _rpmalloc_yield() { __asm__ volatile( "pause" ::: "memory" ); }
 #endif
 
 ////////////
@@ -731,11 +734,6 @@ rpmalloc_set_main_thread(void) {
 	_rpmalloc_main_thread_id = get_thread_id();
 }
 
-static void
-_rpmalloc_spin(void) {
-	__asm__ volatile( "pause" ::: "memory" );
-}
-
 ////////////
 ///
 /// SYNC primitives
@@ -743,22 +741,23 @@ _rpmalloc_spin(void) {
 //////
 FORCEINLINE int _rpmalloc_try_acquire( atomic32_t* lock )
 {
-	uint16_t cycles = 0xFFFF;
+	int cycles = 0xFFFF;
 
 	int irq = rpmalloc_read_irq();
 	while ( 1 )
 	{
-		while ( atomic_load32( lock ) )
+		rpmalloc_set_irq( 0xF );
+		if ( EXPECTED( atomic_bit_test_and_set( lock, 0 ) == 0 ) )
+			return irq;
+		rpmalloc_set_irq( irq );
+
+		do
 		{
 			if ( !--cycles )
 				return -1;
-			_rpmalloc_spin();
+			_rpmalloc_yield();
 		}
-
-		rpmalloc_set_irq( 0xF );
-		if ( atomic_cas32_acquire( lock, 1, 0 ) )
-			return irq;
-		rpmalloc_set_irq( irq );
+		while ( atomic_load32( lock ) );
 	}
 }
 FORCEINLINE int _rpmalloc_acquire( atomic32_t* lock )
@@ -766,13 +765,14 @@ FORCEINLINE int _rpmalloc_acquire( atomic32_t* lock )
 	int irq = rpmalloc_read_irq();
 	while ( 1 )
 	{
-		while ( atomic_load32( lock ) )
-			_rpmalloc_spin();
-
 		rpmalloc_set_irq( 0xF );
-		if ( atomic_cas32_acquire( lock, 1, 0 ) )
+		if ( EXPECTED( atomic_bit_test_and_set( lock, 0 ) == 0 ) )
 			return irq;
 		rpmalloc_set_irq( irq );
+
+		do
+			_rpmalloc_yield();
+		while ( atomic_load32( lock ) );
 	}
 }
 FORCEINLINE void _rpmalloc_release( atomic32_t* lock, int irq )
@@ -1916,7 +1916,7 @@ _rpmalloc_heap_release(void* heapptr, int first_class, int release_cache) {
 	// lock atomic is unknown and it's best to just go ahead and exit
 	if (get_thread_id() != _rpmalloc_main_thread_id) {
 		while (!atomic_cas32_acquire(&_memory_global_lock, 1, 0))
-			_rpmalloc_spin();
+			_rpmalloc_yield();
 	}
 	_rpmalloc_heap_orphan(heap, first_class);
 	atomic_store32_release(&_memory_global_lock, 0);
