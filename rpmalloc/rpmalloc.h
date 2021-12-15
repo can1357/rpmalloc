@@ -135,28 +135,15 @@ typedef struct rpmalloc_thread_statistics_t {
 } rpmalloc_thread_statistics_t;
 
 typedef struct rpmalloc_config_t {
-	//! Map memory pages for the given number of bytes. The returned address MUST be
-	//  aligned to the rpmalloc span size, which will always be a power of two.
-	//  Optionally the function can store an alignment offset in the offset variable
-	//  in case it performs alignment and the returned pointer is offset from the
-	//  actual start of the memory region due to this alignment. The alignment offset
-	//  will be passed to the memory unmap function. The alignment offset MUST NOT be
-	//  larger than 65535 (storable in an uint16_t), if it is you must use natural
-	//  alignment to shift it into 16 bits. If you set a memory_map function, you
-	//  must also set a memory_unmap function or else the default implementation will
-	//  be used for both.
-	void* (*memory_map)(size_t size, size_t* offset);
-	//! Unmap the memory pages starting at address and spanning the given number of bytes.
-	//  If release is set to non-zero, the unmap is for an entire span range as returned by
-	//  a previous call to memory_map and that the entire range should be released. The
-	//  release argument holds the size of the entire span range. If release is set to 0,
-	//  the unmap is a partial decommit of a subset of the mapped memory range.
-	//  If you set a memory_unmap function, you must also set a memory_map function or
-	//  else the default implementation will be used for both.
-	void (*memory_unmap)(void* address, size_t size, size_t offset, size_t release);
 	//! Called when an assert fails, if asserts are enabled. Will use the standard assert()
 	//  if this is not set.
 	void (*error_callback)(const char* message);
+	//! Called when a call to map memory pages fails (out of memory). If this callback is
+	//  not set or returns zero the library will return a null pointer in the allocation
+	//  call. If this callback returns non-zero the map call will be retried. The argument
+	//  passed is the number of bytes that was requested in the map call. Only used if
+	//  the default system memory map function is used (memory_map callback is not set).
+	int (*map_fail_callback)(size_t size);
 	//! Size of memory pages. The page size MUST be a power of two. All memory mapping
 	//  requests to memory_map will be made with size set to a multiple of the page size.
 	//  Used if RPMALLOC_CONFIGURABLE is defined to 1, otherwise system page size is used.
