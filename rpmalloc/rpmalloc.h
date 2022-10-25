@@ -178,7 +178,7 @@ extern void* rpmalloc_get_tls();
 extern void rpmalloc_set_tls( void* ptr );
 extern void* rpmalloc_mmap_os( size_t size, size_t* offset );
 extern void rpmalloc_unmap_os( void* address, size_t size, size_t offset, size_t release );
-extern int rpmalloc_read_irq();
+extern int rpmalloc_get_irq();
 extern void rpmalloc_set_irq( int irq );
 
 //! Initialize allocator with default configuration

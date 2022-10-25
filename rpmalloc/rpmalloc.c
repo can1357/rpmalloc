@@ -766,7 +766,7 @@ rpmalloc_set_main_thread(void) {
 FORCEINLINE int _rpmalloc_try_acquire( atomic32_t* lock )
 {
 	int spin_count = 0x7F;
-	int irq = rpmalloc_read_irq();
+	int irq = rpmalloc_get_irq();
 	while ( 1 )
 	{
 		rpmalloc_set_irq( 0xF );
@@ -785,7 +785,7 @@ FORCEINLINE int _rpmalloc_try_acquire( atomic32_t* lock )
 }
 FORCEINLINE int _rpmalloc_acquire( atomic32_t* lock )
 {
-	int irq = rpmalloc_read_irq();
+	int irq = rpmalloc_get_irq();
 	while ( 1 )
 	{
 		rpmalloc_set_irq( 0xF );
