@@ -765,7 +765,7 @@ rpmalloc_set_main_thread(void) {
 //////
 FORCEINLINE int _rpmalloc_try_acquire( atomic32_t* lock )
 {
-	int spin_count = 0x7F;
+	uint8_t spin_count = 0x00;
 	int irq = rpmalloc_get_irq();
 	while ( 1 )
 	{
@@ -776,11 +776,11 @@ FORCEINLINE int _rpmalloc_try_acquire( atomic32_t* lock )
 
 		do
 		{
-			if ( !--spin_count )
+			if ( UNEXPECTED( !++spin_count ) )
 				return -1;
 			_rpmalloc_yield();
 		}
-		while ( atomic_load32( lock ) );
+		while ( atomic_load32( lock ) & 1 );
 	}
 }
 FORCEINLINE int _rpmalloc_acquire( atomic32_t* lock )
@@ -789,13 +789,13 @@ FORCEINLINE int _rpmalloc_acquire( atomic32_t* lock )
 	while ( 1 )
 	{
 		rpmalloc_set_irq( 0xF );
-		if ( EXPECTED( atomic_bit_test_and_set( lock, 0 ) == 0 ) )
+		if ( EXPECTED( !atomic_bit_test_and_set( lock, 0 ) ) )
 			return irq;
 		rpmalloc_set_irq( irq );
 
 		do
 			_rpmalloc_yield();
-		while ( atomic_load32( lock ) );
+		while ( atomic_load32( lock ) & 1 );
 	}
 }
 FORCEINLINE void _rpmalloc_release( atomic32_t* lock, int irq )
