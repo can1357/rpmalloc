@@ -636,9 +636,9 @@ static uintptr_t _rpmalloc_main_thread_id;
 //! Configuration
 static rpmalloc_config_t _memory_config;
 //! Memory page size
-static const size_t _memory_page_size = 2 * 1024 * 1024;
+#define _memory_page_size (2 * 1024 * 1024)
 //! Shift to divide by page size
-static const size_t _memory_page_size_shift = 12 + 9;
+#define _memory_page_size_shift (12 + 9)
 #if RPMALLOC_CONFIGURABLE
 //! Size of a span of memory pages
 static size_t _memory_span_size;
@@ -663,7 +663,7 @@ static size_t _memory_medium_size_limit;
 //! Heap ID counter
 static atomic32_t _memory_heap_id;
 //! Huge page support
-static const int _memory_huge_pages = 1;
+#define _memory_huge_pages 1
 #if ENABLE_GLOBAL_CACHE
 //! Global span cache
 static global_cache_t* _memory_span_cache;
