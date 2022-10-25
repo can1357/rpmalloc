@@ -2508,13 +2508,13 @@ rpmalloc_initialize(void) {
 	//	rpmalloc_thread_initialize();
 	//	return 0;
 	//}
-	return rpmalloc_initialize_config(0);
+	return rpmalloc_initialize_config(0, 0);
 }
 
 int
-rpmalloc_initialize_config(const rpmalloc_config_t* config) {
+rpmalloc_initialize_config(const rpmalloc_config_t* config, int skip_thread) {
 	if (_rpmalloc_initialized) {
-		rpmalloc_thread_initialize();
+		if ( !skip_thread ) rpmalloc_thread_initialize();
 		return 0;
 	}
 	_rpmalloc_initialized = 1;
@@ -2604,7 +2604,7 @@ rpmalloc_initialize_config(const rpmalloc_config_t* config) {
 	atomic_store32_release(&_memory_global_lock, 0);
 
 	//Initialize this thread
-	rpmalloc_thread_initialize();
+	if ( !skip_thread ) rpmalloc_thread_initialize();
 	return 0;
 }
 
@@ -2707,7 +2707,7 @@ extern inline RPMALLOC_ALLOCATOR void*
 rpcalloc(size_t num, size_t size) {
 	size_t total;
 #if ENABLE_VALIDATE_ARGS
-	int err = __builtin_umull_overflow(num, size, &total);
+	int err = __builtin_umulll_overflow(num, size, &total);
 	if (err || (total >= MAX_ALLOC_SIZE)) {
 		errno = EINVAL;
 		return 0;
@@ -2757,7 +2757,7 @@ extern inline RPMALLOC_ALLOCATOR void*
 rpaligned_calloc(size_t alignment, size_t num, size_t size) {
 	size_t total;
 #if ENABLE_VALIDATE_ARGS
-	int err = __builtin_umull_overflow(num, size, &total);
+	int err = __builtin_umulll_overflow(num, size, &total);
 	if (err || (total >= MAX_ALLOC_SIZE)) {
 		errno = EINVAL;
 		return 0;
@@ -3055,19 +3055,11 @@ extern inline RPMALLOC_ALLOCATOR void*
 rpmalloc_heap_aligned_calloc(rpmalloc_heap_t* heap, size_t alignment, size_t num, size_t size) {
 	size_t total;
 #if ENABLE_VALIDATE_ARGS
-#if PLATFORM_WINDOWS
-	int err = SizeTMult(num, size, &total);
-	if ((err != S_OK) || (total >= MAX_ALLOC_SIZE)) {
-		errno = EINVAL;
-		return 0;
-	}
-#else
-	int err = __builtin_umull_overflow(num, size, &total);
+	int err = __builtin_umulll_overflow(num, size, &total);
 	if (err || (total >= MAX_ALLOC_SIZE)) {
 		errno = EINVAL;
 		return 0;
 	}
-#endif
 #else
 	total = num * size;
 #endif
